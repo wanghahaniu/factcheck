@@ -500,31 +500,15 @@ body {
       </div>
     </div>
 
-    <div class="sidebar-section">
+    <div class="sidebar-section" style="display:none">
       <div class="sidebar-label">API 配置</div>
       <div class="api-input-wrap" style="margin-bottom:8px">
-        <input type="password" class="api-input" id="apiKey" placeholder="智谱 GLM API Key">
+        <input type="password" class="api-input" id="apiKey" placeholder="Claude API Key (sk-...)">
         <button class="api-toggle" onclick="toggleApiKey('apiKey')">👁</button>
       </div>
       <div class="api-input-wrap">
-        <input type="password" class="api-input" id="tavilyKey" placeholder="Tavily API Key（真实搜索）">
+        <input type="password" class="api-input" id="tavilyKey" placeholder="Tavily API Key（真实搜索，可选）">
         <button class="api-toggle" onclick="toggleApiKey('tavilyKey')">👁</button>
-      </div>
-      <div style="font-size:10px;color:var(--text-muted);margin-top:6px;line-height:1.5">
-        填入 Tavily Key 后启用真实联网检索<br>
-        <a href="https://app.tavily.com" target="_blank" style="color:var(--blue);text-decoration:none">→ 免费注册 tavily.com</a>
-      </div>
-    </div>
-
-    <div class="sidebar-section">
-      <div class="sidebar-label">核查类型</div>
-      <div class="category-grid">
-        <button class="cat-btn active" data-cat="auto" onclick="selectCat(this)">🤖 自动识别</button>
-        <button class="cat-btn" data-cat="military" onclick="selectCat(this)">⚔️ 军事</button>
-        <button class="cat-btn" data-cat="finance" onclick="selectCat(this)">📈 金融</button>
-        <button class="cat-btn" data-cat="energy" onclick="selectCat(this)">⚡ 能源</button>
-        <button class="cat-btn" data-cat="social" onclick="selectCat(this)">👥 社会</button>
-        <button class="cat-btn" data-cat="policy" onclick="selectCat(this)">📋 政策</button>
       </div>
     </div>
 
@@ -536,7 +520,7 @@ body {
     </div>
 
     <div style="font-size:10px;color:var(--text-muted);text-align:center;padding-top:12px;border-top:1px solid var(--border)">
-      Powered by 智谱 GLM-5 · 仅供参考
+      Powered by Claude Sonnet 4.6 · 仅供参考
     </div>
   </aside>
 
@@ -569,9 +553,10 @@ body {
 
         <!-- 图片上传 -->
         <div id="imageInputArea" style="display:none">
+          <input type="file" id="imageInput" accept="image/*" style="display:none" onchange="handleImageSelect(event)">
           <div class="image-upload-area" id="uploadArea"
+            onclick="document.getElementById('imageInput').click()"
             ondragover="handleDragOver(event)" ondragleave="handleDragLeave(event)" ondrop="handleDrop(event)">
-            <input type="file" class="upload-input" id="imageInput" accept="image/*" onchange="handleImageSelect(event)">
             <div id="uploadPlaceholder">
               <div class="upload-icon">📷</div>
               <div class="upload-text">点击上传或拖拽图片到此处</div>
@@ -613,10 +598,13 @@ let state = {
 };
 
 // ===== 初始化 =====
+const PRESET_API_KEY = 'sk-NuKAg9UzfeCAqwxsc8E31rFU6hvXNpAv7p3Bweufo9VoJZjI';
+const PRESET_TAVILY_KEY = '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';
+
 document.addEventListener('DOMContentLoaded', () => {
-  const saved = localStorage.getItem('fce_apikey');
+  const saved = localStorage.getItem('fce_apikey') || PRESET_API_KEY;
   if (saved) document.getElementById('apiKey').value = saved;
-  const savedTavily = localStorage.getItem('fce_tavilykey');
+  const savedTavily = localStorage.getItem('fce_tavilykey') || PRESET_TAVILY_KEY;
   if (savedTavily) document.getElementById('tavilyKey').value = savedTavily;
   renderHistory();
 });
@@ -759,16 +747,13 @@ function renderSteps(activeId, doneIds = [], errorId = null) {
 
 // ===== 主流程 =====
 async function startCheck() {
-  const apiKey = document.getElementById('apiKey').value.trim();
-  if (!apiKey) { alert('请先输入智谱 API Key'); return; }
-  localStorage.setItem('fce_apikey', apiKey);
-  const tavilyKey = document.getElementById('tavilyKey').value.trim();
-  if (tavilyKey) localStorage.setItem('fce_tavilykey', tavilyKey);
+  const apiKey = PRESET_API_KEY;
+  const tavilyKey = PRESET_TAVILY_KEY;
 
   const isImage = state.inputMode === 'image';
-  if (isImage && !state.imageBase64) { alert('请先上传图片'); return; }
+  if (isImage && !state.imageBase64) { console.error('请先上传图片'); return; }
   const text = document.getElementById('textInput').value.trim();
-  if (!isImage && !text) { alert('请输入需要核查的内容'); return; }
+  if (!isImage && !text) { console.error('请输入需要核查的内容'); return; }
 
   showPanel('progressPanel');
   const done = [];
@@ -778,46 +763,73 @@ async function startCheck() {
     renderSteps('extract', done);
     let rawText = text;
     if (isImage) {
-      rawText = await callGLM(apiKey, buildOCRPrompt(), null, state.imageBase64);
+      rawText = await callOpenAI(apiKey, buildOCRPrompt(), null, state.imageBase64);
+      if (!rawText || rawText.trim().length < 10) {
+        throw new Error('图片中未识别到有效文字，请上传包含文字的截图');
+      }
     }
     done.push('extract');
 
     // Step 2: 拆解主张
     renderSteps('claims', done);
-    const claimsJson = await callGLM(apiKey, buildClaimsPrompt(rawText, state.category));
-    const claimsData = parseJSON(claimsJson);
+    let claimsJson, claimsData;
+    try {
+      claimsJson = await callOpenAI(apiKey, buildClaimsPrompt(rawText, state.category));
+      claimsData = parseJSON(claimsJson);
+    } catch(e) {
+      throw new Error('Step2失败: ' + e.message + ' | 原始返回: ' + String(claimsJson).slice(0, 300));
+    }
     done.push('claims');
 
     // Step 3: 生成搜索策略
     renderSteps('queries', done);
-    const queriesJson = await callGLM(apiKey, buildQueriesPrompt(claimsData));
-    const queriesData = parseJSON(queriesJson);
+    let queriesJson, queriesData;
+    try {
+      queriesJson = await callOpenAI(apiKey, buildQueriesPrompt(claimsData));
+      queriesData = parseJSON(queriesJson);
+    } catch(e) {
+      throw new Error('Step3失败: ' + e.message + ' | 原始: ' + String(queriesJson).slice(0, 200));
+    }
     done.push('queries');
 
     // Step 4: 多源检索
     renderSteps('search', done);
     let searchData;
     if (tavilyKey) {
-      // 真实联网检索
       searchData = await tavilySearch(tavilyKey, claimsData, queriesData);
     } else {
-      // 降级：AI 知识库模拟（来源为训练数据，非实时）
-      const searchJson = await callGLM(apiKey, buildSearchPrompt(rawText, claimsData, queriesData));
-      searchData = parseJSON(searchJson);
-      searchData._simulated = true;
+      let searchJson;
+      try {
+        searchJson = await callOpenAI(apiKey, buildSearchPrompt(rawText, claimsData, queriesData));
+        searchData = parseJSON(searchJson);
+        searchData._simulated = true;
+      } catch(e) {
+        throw new Error('Step4失败: ' + e.message + ' | 原始: ' + String(searchJson).slice(0, 200));
+      }
     }
     done.push('search');
 
-    // Step 5: 交叉比对
+    // Step 5: 交叉比对（限制来源数量，防止中转截断）
     renderSteps('verify', done);
-    const verifyJson = await callGLM(apiKey, buildVerifyPrompt(claimsData, searchData));
-    const verifyData = parseJSON(verifyJson);
+    let verifyJson, verifyData;
+    try {
+      const trimmedSearchData = { ...searchData, sources: (searchData.sources || []).slice(0, 6) };
+      verifyJson = await callOpenAI(apiKey, buildVerifyPrompt(claimsData, trimmedSearchData));
+      verifyData = parseJSON(verifyJson);
+    } catch(e) {
+      throw new Error('Step5失败: ' + e.message + ' | 原始: ' + String(verifyJson).slice(0, 200));
+    }
     done.push('verify');
 
     // Step 6: 生成报告
     renderSteps('report', done);
-    const reportJson = await callGLM(apiKey, buildReportPrompt(rawText, claimsData, searchData, verifyData, state.category));
-    const reportData = parseJSON(reportJson);
+    let reportJson, reportData;
+    try {
+      reportJson = await callOpenAI(apiKey, buildReportPrompt(rawText, claimsData, searchData, verifyData, state.category));
+      reportData = parseJSON(reportJson);
+    } catch(e) {
+      throw new Error('Step6失败: ' + e.message + ' | 原始: ' + String(reportJson).slice(0, 200));
+    }
     done.push('report');
     renderSteps(null, done);
 
@@ -835,8 +847,9 @@ async function startCheck() {
   }
 }
 
-// ===== GLM API 调用 =====
-async function callGLM(apiKey, prompt, systemMsg, imageBase64) {
+// ===== Claude API 调用（bot.ccnccn.cn 中转，OpenAI 兼容格式）=====
+async function callOpenAI(apiKey, prompt, systemMsg, imageBase64) {
+  const model = 'claude-sonnet-4-6';
   const messages = [];
   if (systemMsg) messages.push({ role: 'system', content: systemMsg });
 
@@ -853,10 +866,13 @@ async function callGLM(apiKey, prompt, systemMsg, imageBase64) {
     messages.push({ role: 'user', content: prompt });
   }
 
-  const res = await fetch('https://open.bigmodel.cn/api/paas/v4/chat/completions', {
+  const res = await fetch('https://bot.ccnccn.cn/v1/chat/completions', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + apiKey },
-    body: JSON.stringify({ model: 'glm-5', messages, temperature: 0.1, max_tokens: 4000 })
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': 'Bearer ' + apiKey
+    },
+    body: JSON.stringify({ model, messages, temperature: 0.1, max_tokens: 32000 })
   });
 
   if (!res.ok) {
@@ -947,11 +963,71 @@ function getTier(url) {
 }
 
 function parseJSON(text) {
-  const match = text.match(/```(?:json)?\s*([\s\S]*?)```/) || text.match(/(\{[\s\S]*\}|\[[\s\S]*\])/);
-  if (match) {
-    try { return JSON.parse(match[1] || match[0]); } catch(e) {}
+  // 去掉 markdown 代码块（各种格式）
+  let raw = text.trim();
+  raw = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '').trim();
+
+  try { return JSON.parse(raw); } catch(e) {}
+
+  // 尝试修复字符串内部的未转义双引号
+  try {
+    const fixed = raw.replace(/:(\s*)"((?:[^"\\]|\\.)*)"([^,\}\]:])/g, (m, colon, val, after) => {
+      return colon + '"' + val.replace(/"/g, '\\"') + '"' + after;
+    });
+    return JSON.parse(fixed);
+  } catch(e) {}
+
+  const start = raw.indexOf('{');
+  if (start === -1) throw new Error('无法解析 AI 返回的 JSON：' + raw.slice(0, 200));
+  let str = raw.slice(start);
+  // 去掉末尾可能残留的 ```
+  str = str.replace(/```[\s\S]*$/, '').trim();
+  try { return JSON.parse(str); } catch(e) {}
+
+  // 截断修复：找到最后一个完整的数组元素对象（depth从2降到1的}），截断后补全括号
+  let depth = 0, inStr = false, escape = false, lastItemEnd = -1;
+  for (let i = 0; i < str.length; i++) {
+    const c = str[i];
+    if (escape) { escape = false; continue; }
+    if (inStr && c === '\\') { escape = true; continue; }
+    if (c === '"') { inStr = !inStr; continue; }
+    if (inStr) continue;
+    if (c === '{' || c === '[') depth++;
+    else if (c === '}' || c === ']') {
+      const prevDepth = depth;
+      depth--;
+      if (prevDepth === 2 && c === '}') lastItemEnd = i;
+    }
   }
-  try { return JSON.parse(text); } catch(e) {}
+
+  if (lastItemEnd > 0) {
+    let partial = str.slice(0, lastItemEnd + 1);
+    const arrClose = (partial.match(/\[/g)||[]).length - (partial.match(/\]/g)||[]).length;
+    const objClose = (partial.match(/\{/g)||[]).length - (partial.match(/\}/g)||[]).length;
+    partial += ']'.repeat(Math.max(0, arrClose)) + '}'.repeat(Math.max(0, objClose));
+    try { return JSON.parse(partial); } catch(e) {}
+  }
+
+  // 截断在字符串内部时：强制关闭当前位置
+  if (depth > 0) {
+    let partial = str;
+    if (inStr) partial += '"';  // 关闭未完成的字符串
+    // 用栈重新计算需要补全的括号
+    let stack = [], inS2 = false, esc2 = false;
+    for (let i = 0; i < partial.length; i++) {
+      const c = partial[i];
+      if (esc2) { esc2 = false; continue; }
+      if (inS2 && c === '\\') { esc2 = true; continue; }
+      if (c === '"') { inS2 = !inS2; continue; }
+      if (inS2) continue;
+      if (c === '{') stack.push('}');
+      else if (c === '[') stack.push(']');
+      else if (c === '}' || c === ']') stack.pop();
+    }
+    partial += stack.reverse().join('');
+    try { return JSON.parse(partial); } catch(e) {}
+  }
+
   throw new Error('无法解析 AI 返回的 JSON：' + text.slice(0, 200));
 }
 
@@ -966,203 +1042,77 @@ function buildOCRPrompt() {
 }
 
 function buildClaimsPrompt(text, category) {
-  return `你是一位专业的事实核查分析师。请分析以下内容，提取其中的可验证事实主张。
-
-待核查内容：
-"""
-${text}
-"""
-
-核查类型：${category === 'auto' ? '自动识别' : category}
-
-请将内容拆解为3~6个独立的、可验证的子主张。每个主张应该：
-- 具体、明确，可以独立核查
-- 包含关键实体（人物、机构、地点、时间、数字等）
-- 不重叠、不冗余
-
-请以JSON格式返回：
-\`\`\`json
-{
-  "summary": "原消息摘要（50字以内）",
-  "category": "主题分类（军事/金融/能源/社会/政策/其他）",
-  "claims": [
-    {
-      "id": 1,
-      "text": "主张内容",
-      "entities": ["关键实体1", "关键实体2"],
-      "verifiable": true,
-      "priority": "high/medium/low"
-    }
-  ]
-}
-\`\`\``;
+  const truncated = text.slice(0, 200);
+  return `从以下内容提取2个最重要的可验证事实主张，只返回JSON，文本字段中不得使用双引号（用「」代替）：
+"""${truncated}"""
+{"summary":"15字摘要","category":"军事/金融/能源/社会/政策/其他","claims":[{"id":1,"text":"30字内","priority":"high"},{"id":2,"text":"30字内","priority":"high"}]}`;
 }
 
 function buildQueriesPrompt(claimsData) {
   const claimsList = claimsData.claims.map(c => `${c.id}. ${c.text}`).join('\n');
-  return `你是一位专业的信息检索专家。针对以下事实主张，生成最优的搜索查询策略。
-
-主张列表：
-${claimsList}
-
-请为每条主张生成2~3个搜索查询，覆盖：
-- 中文权威来源查询
-- 英文国际来源查询（如适用）
-- 针对关键实体的精确查询
-
-请以JSON格式返回：
-\`\`\`json
-{
-  "queries": [
-    {
-      "claim_id": 1,
-      "queries": [
-        {"lang": "zh", "query": "搜索词", "target": "官方/主流媒体/专业媒体"},
-        {"lang": "en", "query": "search terms", "target": "international"}
-      ]
-    }
-  ]
-}
-\`\`\``;
+  return `为以下主张生成搜索策略，每条主张2个查询。只返回JSON：
+主张：${claimsList}
+{"queries":[{"claim_id":1,"queries":[{"lang":"zh","query":"搜索词"},{"lang":"en","query":"search terms"}]}]}`;
 }
 
 function buildSearchPrompt(rawText, claimsData, queriesData) {
   const claimsList = claimsData.claims.map(c => `${c.id}. ${c.text}`).join('\n');
-  return `你是一位资深的信息核查研究员，拥有广泛的知识库。请基于你的知识，模拟对以下主张进行多源信息检索。
+  return `你是信息核查研究员。基于知识库模拟检索以下主张的证据。
 
-原始内容摘要：${claimsData.summary}
-
-待核查主张：
+摘要：${claimsData.summary}
+主张：
 ${claimsList}
 
-请模拟从以下来源检索相关信息：
-- 第一层：政府官网、官方机构、权威通讯社（新华社、路透社、AP等）
-- 第二层：主流媒体（央视、人民日报、财新、BBC、Bloomberg等）
-- 第三层：专业垂直媒体（行业网站、专业数据库）
-- 第四层：社交媒体（仅作参考）
+要求：
+1. 每条主张最多返回2条来源，全部来源总数不超过6条
+2. snippet限50字，不要编造不存在的事件
+3. 超出知识范围的标注"知识库无记录"
 
-重要原则：
-1. 基于你的实际知识给出信息，不要编造不存在的事件
-2. 如果某主张超出你的知识范围，明确标注"知识库无相关记录"
-3. 注意时间线，标注信息的大致时间
-4. 区分已知事实与推测
-
-请以JSON格式返回：
-\`\`\`json
-{
-  "sources": [
-    {
-      "id": "s1",
-      "claim_id": 1,
-      "name": "来源名称",
-      "type": "官方/主流媒体/专业媒体/社交媒体",
-      "tier": 1,
-      "title": "相关报道/信息标题",
-      "snippet": "关键内容摘要（100字以内）",
-      "date": "发布时间（如已知）",
-      "url": "来源URL（如已知，否则填null）",
-      "supports_claim": "yes/no/partial/unknown",
-      "credibility": "high/medium/low",
-      "notes": "补充说明"
-    }
-  ],
-  "knowledge_gaps": ["无法从知识库确认的主张ID列表"]
-}
-\`\`\``;
+只返回JSON：
+{"sources":[{"id":"s1","claim_id":1,"name":"来源名","type":"官方/主流媒体/专业媒体","tier":1,"title":"标题","snippet":"摘要50字内","date":"时间","url":null,"supports_claim":"yes/no/partial/unknown","credibility":"high/medium/low"}],"knowledge_gaps":[]}`;
 }
 
 function buildVerifyPrompt(claimsData, searchData) {
-  return `你是一位严谨的事实核查编辑。请基于检索到的证据，对每条主张进行交叉验证分析。
-
-主张列表：
-${JSON.stringify(claimsData.claims, null, 2)}
-
-检索到的证据：
-${JSON.stringify(searchData.sources, null, 2)}
-
-请进行严格的交叉验证，分析：
-1. 哪些主张被权威来源证实
-2. 哪些主张存在来源冲突
-3. 哪些主张缺乏足够证据
-4. 是否存在时间线错配、旧闻复用、实体信息不一致等问题
-
-请以JSON格式返回：
-\`\`\`json
-{
-  "claim_verdicts": [
-    {
-      "claim_id": 1,
-      "status": "confirmed/doubt/insufficient/false",
-      "supporting_sources": ["s1", "s2"],
-      "conflicting_sources": [],
-      "analysis": "详细分析（100字以内）",
-      "issues": ["时间线问题/实体不一致/旧闻复用等，如有"]
-    }
-  ],
-  "confirmed_facts": ["已确认的事实描述"],
-  "doubtful_info": ["存疑信息描述"],
-  "insufficient_evidence": ["证据不足的主张描述"],
-  "conflicts": [
-    {
-      "claim_id": 1,
-      "description": "冲突描述",
-      "source_a": "支持方来源",
-      "source_b": "反对方来源",
-      "resolution": "建议采信哪方及原因"
-    }
-  ]
-}
-\`\`\``;
+  const claims = (claimsData.claims || []).map(c => ({ id: c.id, text: c.text.slice(0, 60) }));
+  const sources = (searchData.sources || []).slice(0, 6).map(s => ({
+    id: s.id, name: (s.name||'').slice(0, 20), tier: s.tier,
+    snippet: (s.snippet || '').slice(0, 60),
+    supports_claim: s.supports_claim
+  }));
+  return `事实核查验证。只返回JSON不要解释：
+主张：${JSON.stringify(claims)}
+证据：${JSON.stringify(sources)}
+{"claim_verdicts":[{"claim_id":1,"status":"confirmed/doubt/insufficient/false","supporting_sources":["s1"],"conflicting_sources":[],"analysis":"15字内"}],"confirmed_facts":[],"doubtful_info":[],"insufficient_evidence":[],"conflicts":[]}`;
 }
 
 function buildReportPrompt(rawText, claimsData, searchData, verifyData, category) {
   const confirmedCount = verifyData.claim_verdicts?.filter(v => v.status === 'confirmed').length || 0;
   const totalCount = claimsData.claims?.length || 1;
-  return `你是一位权威的事实核查报告撰写专家。请基于以下核查数据，生成最终核查报告。
+  // 压缩 verifyData，只传统计摘要，不传完整 JSON
+  const verdictSummary = (verifyData.claim_verdicts || []).map(v =>
+    `主张${v.claim_id}:${v.status}(${v.analysis || ''})`
+  ).join('\n');
+  return `你是事实核查报告专家。基于以下核查数据生成最终报告。
 
-核查摘要：${claimsData.summary}
-已确认主张：${confirmedCount}/${totalCount}
-核查类型：${category}
+摘要：${claimsData.summary}
+已确认：${confirmedCount}/${totalCount}，类型：${category}
+已确认事实：${(verifyData.confirmed_facts||[]).join('；')}
+存疑信息：${(verifyData.doubtful_info||[]).join('；')}
+证据不足：${(verifyData.insufficient_evidence||[]).join('；')}
+逐条结果：
+${verdictSummary}
 
-验证结果：
-${JSON.stringify(verifyData, null, 2)}
+评分标准：source_authority(0-30) multi_source(0-25) timeline(0-15) entity(0-15) evidence(0-15)
+结论映射：80-100高可信，60-79基本可信，40-59存疑，20-39高度存疑，0-19大概率虚假
 
-请生成最终报告，包含：
-1. 可信度评分（严格按证据打分，不要虚高）
-2. 最终结论
-3. 核心理由（3~5条）
-4. 反向验证建议（2~3条）
-
-评分维度（严格评分）：
-- source_authority: 来源权威性（0-30）：有官方来源30，主流媒体20，专业媒体15，仅社媒5
-- multi_source: 多源印证度（0-25）：3+来源一致25，2来源15，单一来源8，无来源0
-- timeline: 时间线一致性（0-15）：完全一致15，基本一致10，有疑问5，明显错误0
-- entity: 实体信息一致性（0-15）：完全一致15，基本一致10，有出入5，明显错误0
-- evidence: 关键证据完整性（0-15）：证据充分15，基本充分10，部分缺失5，严重缺失0
-
-最终结论映射：
-- 80-100 → "高可信"
-- 60-79 → "基本可信，建议补充证据"
-- 40-59 → "存疑"
-- 20-39 → "高度存疑"
-- 0-19 → "大概率虚假"
-- 证据严重不足 → "证据不足，暂无法判定"
-
-请以JSON格式返回：
+以JSON返回：
 \`\`\`json
 {
-  "score": {
-    "source_authority": 0,
-    "multi_source": 0,
-    "timeline": 0,
-    "entity": 0,
-    "evidence": 0,
-    "total": 0
-  },
+  "score": { "source_authority": 0, "multi_source": 0, "timeline": 0, "entity": 0, "evidence": 0, "total": 0 },
   "verdict": "最终结论",
   "verdict_level": "high/partial/doubt/false/unknown",
   "reasons": ["理由1", "理由2", "理由3"],
-  "suggestions": ["建议1", "建议2", "建议3"]
+  "reverse_verification": ["建议1", "建议2"]
 }
 \`\`\``;
 }
