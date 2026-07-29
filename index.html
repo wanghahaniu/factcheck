@@ -486,9 +486,102 @@ body {
 
   .report-section { page-break-inside: avoid; break-inside: avoid; margin-bottom: 20px !important; }
 }
+/* ===== LOGIN ===== */
+.login-overlay {
+  position: fixed;
+  inset: 0;
+  background: var(--bg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+  transition: opacity 0.3s ease, visibility 0.3s ease;
+}
+.login-overlay.login-hidden {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+.login-box {
+  width: 360px;
+  max-width: 90%;
+  padding: 40px 32px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  text-align: center;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.4);
+}
+.login-icon {
+  width: 56px;
+  height: 56px;
+  margin: 0 auto 20px;
+  border-radius: 14px;
+  background: linear-gradient(135deg, var(--blue), var(--purple));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 26px;
+}
+.login-title {
+  font-size: 20px;
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+.login-subtitle {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-bottom: 28px;
+}
+.login-input {
+  width: 100%;
+  padding: 12px 14px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text-primary);
+  font-size: 14px;
+  outline: none;
+  transition: border-color 0.2s;
+  margin-bottom: 16px;
+  text-align: center;
+  letter-spacing: 2px;
+}
+.login-input:focus { border-color: var(--blue); }
+.login-btn {
+  width: 100%;
+  padding: 12px;
+  background: linear-gradient(135deg, var(--blue), var(--purple));
+  border: none;
+  border-radius: var(--radius);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.2s;
+}
+.login-btn:hover { opacity: 0.9; }
+.login-error {
+  margin-top: 14px;
+  font-size: 12px;
+  color: var(--red);
+  min-height: 18px;
+}
 </style>
 </head>
 <body>
+<!-- 登录页 -->
+<div class="login-overlay" id="loginOverlay">
+  <div class="login-box">
+    <div class="login-icon">🔒</div>
+    <div class="login-title">事实核查引擎</div>
+    <div class="login-subtitle">请输入访问密码</div>
+    <input type="password" class="login-input" id="loginPassword" placeholder="访问密码" autocomplete="off">
+    <button class="login-btn" onclick="checkLogin()">进入系统</button>
+    <div class="login-error" id="loginError"></div>
+  </div>
+</div>
+
 <div class="app">
   <!-- 侧边栏 -->
   <aside class="sidebar">
@@ -500,14 +593,14 @@ body {
       </div>
     </div>
 
-    <div class="sidebar-section" style="display:none">
-      <div class="sidebar-label">API 配置</div>
+    <div class="sidebar-section">
+      <div class="sidebar-label">API 配置（智谱 GLM）</div>
       <div class="api-input-wrap" style="margin-bottom:8px">
-        <input type="password" class="api-input" id="apiKey" placeholder="Claude API Key (sk-...)">
+        <input type="password" class="api-input" id="apiKey" placeholder="智谱 API Key (xxxxxxxx.yyyyyyyy)" onchange="saveKey('apiKey','fce_apikey')">
         <button class="api-toggle" onclick="toggleApiKey('apiKey')">👁</button>
       </div>
       <div class="api-input-wrap">
-        <input type="password" class="api-input" id="tavilyKey" placeholder="Tavily API Key（真实搜索，可选）">
+        <input type="password" class="api-input" id="tavilyKey" placeholder="Tavily API Key（真实搜索，可选）" onchange="saveKey('tavilyKey','fce_tavilykey')">
         <button class="api-toggle" onclick="toggleApiKey('tavilyKey')">👁</button>
       </div>
     </div>
@@ -520,7 +613,7 @@ body {
     </div>
 
     <div style="font-size:10px;color:var(--text-muted);text-align:center;padding-top:12px;border-top:1px solid var(--border)">
-      Powered by Claude Sonnet 4.6 · 仅供参考
+      Powered by 智谱 GLM-5.2 · 仅供参考
     </div>
   </aside>
 
@@ -586,6 +679,7 @@ body {
   </main>
 </div>
 
+<script src="config.local.js"></script>
 <script>
 // ===== 状态 =====
 let state = {
@@ -598,14 +692,16 @@ let state = {
 };
 
 // ===== 初始化 =====
-const PRESET_API_KEY = 'sk-NuKAg9UzfeCAqwxsc8E31rFU6hvXNpAv7p3Bweufo9VoJZjI';
-const PRESET_TAVILY_KEY = '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';
+// 智谱 GLM API（OpenAI 兼容格式）—— 密钥不硬编码，由侧边栏输入并存入 localStorage
+const ZHIPU_ENDPOINT = 'https://open.bigmodel.cn/api/paas/v4/chat/completions';
+const MODEL_TEXT = 'glm-5.2';         // 文本任务（旗舰，1M 上下文）
+const MODEL_VISION = 'glm-5v-turbo';  // 图片识别（多模态视觉模型）
 
 document.addEventListener('DOMContentLoaded', () => {
-  const saved = localStorage.getItem('fce_apikey') || PRESET_API_KEY;
-  if (saved) document.getElementById('apiKey').value = saved;
-  const savedTavily = localStorage.getItem('fce_tavilykey') || PRESET_TAVILY_KEY;
-  if (savedTavily) document.getElementById('tavilyKey').value = savedTavily;
+  // 读取优先级：config.local.js（本地私有）→ localStorage → 空（侧边栏手输）
+  const cfg = window.FCE_CONFIG || {};
+  document.getElementById('apiKey').value = cfg.zhipuKey || localStorage.getItem('fce_apikey') || '';
+  document.getElementById('tavilyKey').value = cfg.tavilyKey || localStorage.getItem('fce_tavilykey') || '';
   renderHistory();
 });
 
@@ -613,6 +709,11 @@ document.addEventListener('DOMContentLoaded', () => {
 function toggleApiKey(id) {
   const el = document.getElementById(id);
   el.type = el.type === 'password' ? 'text' : 'password';
+}
+
+// 持久化密钥到 localStorage（仅存浏览器本地，不随源码泄露）
+function saveKey(inputId, storageKey) {
+  localStorage.setItem(storageKey, document.getElementById(inputId).value.trim());
 }
 
 function selectCat(btn) {
@@ -747,8 +848,13 @@ function renderSteps(activeId, doneIds = [], errorId = null) {
 
 // ===== 主流程 =====
 async function startCheck() {
-  const apiKey = PRESET_API_KEY;
-  const tavilyKey = PRESET_TAVILY_KEY;
+  const apiKey = document.getElementById('apiKey').value.trim();
+  if (!apiKey) {
+    alert('请先在左侧「API 配置」填入智谱 API Key');
+    showPanel('inputPanel');
+    return;
+  }
+  const tavilyKey = document.getElementById('tavilyKey').value.trim();
 
   const isImage = state.inputMode === 'image';
   if (isImage && !state.imageBase64) { console.error('请先上传图片'); return; }
@@ -847,9 +953,10 @@ async function startCheck() {
   }
 }
 
-// ===== Claude API 调用（bot.ccnccn.cn 中转，OpenAI 兼容格式）=====
+// ===== 智谱 GLM API 调用（OpenAI 兼容格式）=====
 async function callOpenAI(apiKey, prompt, systemMsg, imageBase64) {
-  const model = 'claude-sonnet-4-6';
+  // 文本用 glm-5.2，图片识别用多模态 glm-5v-turbo
+  const model = imageBase64 ? MODEL_VISION : MODEL_TEXT;
   const messages = [];
   if (systemMsg) messages.push({ role: 'system', content: systemMsg });
 
@@ -866,13 +973,13 @@ async function callOpenAI(apiKey, prompt, systemMsg, imageBase64) {
     messages.push({ role: 'user', content: prompt });
   }
 
-  const res = await fetch('https://bot.ccnccn.cn/v1/chat/completions', {
+  const res = await fetch(ZHIPU_ENDPOINT, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       'Authorization': 'Bearer ' + apiKey
     },
-    body: JSON.stringify({ model, messages, temperature: 0.1, max_tokens: 32000 })
+    body: JSON.stringify({ model, messages, temperature: 0.1, max_tokens: 8000 })
   });
 
   if (!res.ok) {
@@ -1478,6 +1585,29 @@ function showHistoryItem(i) {
   alert('历史记录功能：当前版本仅保存标题和评分，完整报告需重新核查。');
 }
 
+// ===== 登录验证 =====
+const CORRECT_PASSWORD = 'abc123';
+
+function checkLogin() {
+  const input = document.getElementById('loginPassword').value.trim();
+  const errorEl = document.getElementById('loginError');
+  if (input === CORRECT_PASSWORD) {
+    document.getElementById('loginOverlay').classList.add('login-hidden');
+    document.body.style.overflow = '';
+    errorEl.textContent = '';
+  } else {
+    errorEl.textContent = '密码错误，请重试';
+    document.getElementById('loginPassword').value = '';
+    document.getElementById('loginPassword').focus();
+  }
+}
+
+document.getElementById('loginPassword').addEventListener('keypress', function(e) {
+  if (e.key === 'Enter') checkLogin();
+});
+
+// 锁定底层滚动，防止登录前操作主界面
+document.body.style.overflow = 'hidden';
 </script>
 </body>
 </html>
